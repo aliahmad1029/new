@@ -11,19 +11,30 @@
 
 /* debug */
 //#define DEBUG_STRTOL
+#define MULTI_BUF 1
 
 /* global variables */
 static unsigned long allocated = 0; 
 static unsigned long alloc_size = 0;
 static unsigned long free_siz = 0;
 static void *addr_p;
-static char addr[64] = "";
+static char addr_str[64] = "";
 static char alloc_str[64] = "";
 static char free_str[64] = "";
 
 /* malloc */
 MALLOC_DECLARE(M_KLDMALLOCBUF);
 MALLOC_DEFINE(M_KLDMALLOCBUF, "kld malloc", "Buffers for kld malloc");
+
+/* queue */
+TAILQ_HEAD(tailhead, alloc_buf) head = TAILQ_HEAD_INITIALIZER(head);
+struct tailhead *headp;                         /* Tail queue head. */
+struct alloc_buf {
+    TAILQ_ENTRY(alloc_buf) alloc_bufs;          /* Tail queue. */
+    void *addr_p;
+    char addr_str[64];
+    unsigned long len; 
+} *tmp_alloc_buf;
 
 /* sysctls */
 static struct sysctl_ctx_list clist;
@@ -34,7 +45,7 @@ static void
 sysctl_update_addr(void *p)
 {
     addr_p = p;
-    snprintf(addr, sizeof(addr), "0x%016lx", (unsigned long)addr_p);
+    snprintf(addr_str, sizeof(addr_str), "0x%016lx", (unsigned long)addr_p);
 }
 
 /* if error or non-positive value, return 0 */
@@ -85,6 +96,8 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
     alloc_size = ret;
 
     if (alloc_size) {
+#if MULTI_BUF
+#else
         if (allocated)
             p = realloc(addr_p, (allocated + alloc_size), M_KLDMALLOCBUF, M_NOWAIT);
         else {
@@ -98,6 +111,7 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
             printf("Malloc: allocate %lu at %p, allocated size %lu\n",
                     alloc_size, addr_p, allocated);
         }
+#endif
     }
 alloc_ret:
     alloc_str[0] = '\0';
@@ -125,6 +139,8 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
     free_siz = ret;
 
     if (free_siz) {
+#if MULTI_BUF
+#else
         if (allocated > free_siz) {
             size = allocated - free_siz;
             p = realloc(addr_p, size, M_KLDMALLOCBUF, M_NOWAIT);
@@ -145,7 +161,9 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
         } else {
             printf("Malloc: larger than allocated size\n");
         }
+#endif
     }
+#endif
 free_ret:
     free_str[0] = '\0';
     return error;
@@ -178,17 +196,20 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
                     "A", "size to free");
             SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(poid), OID_AUTO, 
                     "addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
-                    addr, sizeof(addr), "allocalted address");
+                    addr_str, sizeof(addr_str), "allocalted address");
             sysctl_update_addr(NULL);
             uprintf("Malloc module loaded, use 'sysctl malloc' to execute.\n");
             break;
         case MOD_UNLOAD:
+#if MULTI_BUF
+#else
             if (sysctl_ctx_free(&clist)) {
                 uprintf("sysctl_ctx_free failed.\n");
                 return (ENOTEMPTY);
             }
             if (addr_p)
                 free(addr_p, M_KLDMALLOCBUF);
+#endif
             uprintf("Malloc module unloaded.\n");
             break;
         default:
