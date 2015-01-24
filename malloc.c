@@ -142,6 +142,7 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 		TAILQ_INSERT_HEAD(&head, tmp_alloc_buf, alloc_bufs);
 		update_buf(tmp_alloc_buf, p, alloc_size);
 		sysctl_add_buf(tmp_alloc_buf);
+		allocated += alloc_size;
 #else
         if (allocated)
             p = realloc(addr_p, (allocated + alloc_size), M_KLDMALLOCBUF, M_NOWAIT);
@@ -185,6 +186,32 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 
     if (free_siz) {
 #if MULTI_BUF
+		while (free_siz > 0 && allocated > free_siz) {
+			tmp_alloc_buf = TAILQ_LAST(&head, tailhead);
+			if (!tmp_alloc_buf) {
+				printf("Malloc: no buf found to free %lu!\n", free_siz);
+				goto free_ret;
+			}
+			if (tmp_alloc_buf->len > free_siz) {
+				size = tmp_alloc_buf->len - free_siz;
+				p = realloc(tmp_alloc_buf->addr_p, size, M_KLDMALLOCBUF, M_NOWAIT);
+				if (!p) {
+					printf("Malloc: realloc failed\n");
+					goto free_ret;
+				} else {
+					allocated -= free_siz;
+					free_siz = 0;
+					update_buf(tmp_alloc_buf, p, size);
+				}
+			} else {
+				allocated -= tmp_alloc_buf->len;
+				free_siz -= tmp_alloc_buf->len;
+				free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
+				sysctl_remove_buf(tmp_alloc_buf);
+				TAILQ_REMOVE(&head, tmp_alloc_buf, alloc_bufs);
+				free(tmp_alloc_buf, M_KLDMALLOCBUF);
+			}
+		}
 #else
         if (allocated > free_siz) {
             size = allocated - free_siz;
