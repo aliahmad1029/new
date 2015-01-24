@@ -26,6 +26,7 @@ static char free_str[64] = "";
 MALLOC_DECLARE(M_KLDMALLOCBUF);
 MALLOC_DEFINE(M_KLDMALLOCBUF, "kld malloc", "Buffers for kld malloc");
 
+#if MULTI_BUF
 /* queue */
 TAILQ_HEAD(tailhead, alloc_buf) head = TAILQ_HEAD_INITIALIZER(head);
 struct tailhead *headp;                         /* Tail queue head. */
@@ -34,11 +35,14 @@ struct alloc_buf {
     void *addr_p;
     char addr_str[64];
     unsigned long len; 
+	struct sysctl_oid *oid;
 } *tmp_alloc_buf;
+static unsigned long num_bufs = 0;
+#endif
 
 /* sysctls */
 static struct sysctl_ctx_list clist;
-static struct sysctl_oid *poid;
+static struct sysctl_oid *poid, *buf_poid;
 
 /* sysctl procedures */
 static void
@@ -47,7 +51,37 @@ sysctl_update_addr(void *p)
     addr_p = p;
     snprintf(addr_str, sizeof(addr_str), "0x%016lx", (unsigned long)addr_p);
 }
+#if MULTI_BUF
+static void
+sysctl_add_buf(struct alloc_buf *buf) {
+	char buf_idx_str[64] = "";
+	
+	snprintf(buf_idx_str, sizeof(buf_idx_str), "%lu", num_bufs);
+	
+	buf->oid = SYSCTL_ADD_NODE(&clist,
+		SYSCTL_CHILDREN(buf_poid), OID_AUTO,
+		buf_idx_str, 0, 0, "buf root");
+	SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO, 
+		"addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
+		buf->addr_str, sizeof(buf->addr_str), "buf addr");
+	SYSCTL_ADD_ULONG(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO,
+		"len", CTLFLAG_RW, &buf->len, "buf len");
+	num_bufs++;
+}
 
+static void
+sysctl_remove_buf(struct alloc_buf *buf) {
+	sysctl_remove_oid(buf->oid, 1, 1);
+	num_bufs--;
+}
+
+static void
+update_buf(struct alloc_buf *buf, void *addr_p, unsigned long len) {
+	buf->addr_p = addr_p;
+	snprintf(buf->addr_str, sizeof(buf->addr_str), "0x%016lx", (unsigned long)addr_p);
+	buf->len = len;
+}
+#endif
 /* if error or non-positive value, return 0 */
 static long
 size_strtoul(char *str)
@@ -97,6 +131,17 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 
     if (alloc_size) {
 #if MULTI_BUF
+		tmp_alloc_buf = malloc(sizeof(struct alloc_buf), M_KLDMALLOCBUF, M_NOWAIT);
+		if (!tmp_alloc_buf)
+			goto alloc_ret;
+		p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT);
+		if (!p) {
+			free(tmp_alloc_buf, M_KLDMALLOCBUF);
+			goto alloc_ret;
+		}
+		TAILQ_INSERT_HEAD(&head, tmp_alloc_buf, alloc_bufs);
+		update_buf(tmp_alloc_buf, p, alloc_size);
+		sysctl_add_buf(tmp_alloc_buf);
 #else
         if (allocated)
             p = realloc(addr_p, (allocated + alloc_size), M_KLDMALLOCBUF, M_NOWAIT);
@@ -163,7 +208,6 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
         }
 #endif
     }
-#endif
 free_ret:
     free_str[0] = '\0';
     return error;
@@ -198,6 +242,11 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
                     "addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
                     addr_str, sizeof(addr_str), "allocalted address");
             sysctl_update_addr(NULL);
+#if MULTI_BUF
+			buf_poid = SYSCTL_ADD_NODE(&clist,
+                    SYSCTL_CHILDREN(poid), OID_AUTO,
+                    "buf", 0, 0, "buf root");
+#endif
             uprintf("Malloc module loaded, use 'sysctl malloc' to execute.\n");
             break;
         case MOD_UNLOAD:
