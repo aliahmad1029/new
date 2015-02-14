@@ -17,8 +17,10 @@
 static unsigned long allocated = 0; 
 static unsigned long alloc_size = 0;
 static unsigned long free_siz = 0;
+#if !MULTI_BUF
 static void *addr_p;
 static char addr_str[64] = "";
+#endif
 static char alloc_str[64] = "";
 static char free_str[64] = "";
 
@@ -36,7 +38,7 @@ struct alloc_buf {
     char addr_str[64];
     unsigned long len; 
 	struct sysctl_oid *oid;
-} *tmp_alloc_buf;
+} *tmp_alloc_buf, *tmp_free_buf;
 static unsigned long num_bufs = 0;
 #endif
 
@@ -45,13 +47,13 @@ static struct sysctl_ctx_list clist;
 static struct sysctl_oid *poid, *buf_poid;
 
 /* sysctl procedures */
+#if !MULTI_BUF
 static void
-sysctl_update_addr(void *p)
-{
+sysctl_update_addr(void *p) {
     addr_p = p;
     snprintf(addr_str, sizeof(addr_str), "0x%016lx", (unsigned long)addr_p);
 }
-#if MULTI_BUF
+#else
 static void
 sysctl_add_buf(struct alloc_buf *buf) {
 	char buf_idx_str[64] = "";
@@ -265,11 +267,12 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
             SYSCTL_ADD_PROC(&clist, SYSCTL_CHILDREN(poid), OID_AUTO,
                     "free", CTLTYPE_STRING | CTLFLAG_WR, 0, 0, sysctl_free_procedure,
                     "A", "size to free");
+#if !MULTI_BUF
             SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(poid), OID_AUTO, 
                     "addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
                     addr_str, sizeof(addr_str), "allocalted address");
             sysctl_update_addr(NULL);
-#if MULTI_BUF
+#else
 			buf_poid = SYSCTL_ADD_NODE(&clist,
                     SYSCTL_CHILDREN(poid), OID_AUTO,
                     "buf", 0, 0, "buf root");
@@ -278,6 +281,16 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
             break;
         case MOD_UNLOAD:
 #if MULTI_BUF
+			TAILQ_FOREACH_SAFE(tmp_alloc_buf, &head, alloc_bufs, tmp_free_buf) {
+				free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
+				sysctl_remove_buf(tmp_alloc_buf);
+				TAILQ_REMOVE(&head, tmp_alloc_buf, alloc_bufs);
+				free(tmp_alloc_buf, M_KLDMALLOCBUF);
+			}
+			if (sysctl_ctx_free(&clist)) {
+                uprintf("sysctl_ctx_free failed.\n");
+                return (ENOTEMPTY);
+            }
 #else
             if (sysctl_ctx_free(&clist)) {
                 uprintf("sysctl_ctx_free failed.\n");
