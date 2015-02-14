@@ -34,10 +34,11 @@ TAILQ_HEAD(tailhead, alloc_buf) head = TAILQ_HEAD_INITIALIZER(head);
 struct tailhead *headp;                         /* Tail queue head. */
 struct alloc_buf {
     TAILQ_ENTRY(alloc_buf) alloc_bufs;          /* Tail queue. */
+	char oid_str[64];
     void *addr_p;
     char addr_str[64];
     unsigned long len; 
-	struct sysctl_oid *oid;
+	struct sysctl_oid *oid, *aoid, *loid;
 } *tmp_alloc_buf, *tmp_free_buf;
 static unsigned long num_bufs = 0;
 #endif
@@ -55,25 +56,28 @@ sysctl_update_addr(void *p) {
 }
 #else
 static void
-sysctl_add_buf(struct alloc_buf *buf) {
-	char buf_idx_str[64] = "";
-	
-	snprintf(buf_idx_str, sizeof(buf_idx_str), "%lu", num_bufs);
+sysctl_add_buf(struct alloc_buf *buf) {	
+	snprintf(buf->oid_str, sizeof(buf->oid_str), "%lu", num_bufs);
 	
 	buf->oid = SYSCTL_ADD_NODE(&clist,
 		SYSCTL_CHILDREN(buf_poid), OID_AUTO,
-		buf_idx_str, 0, 0, "buf root");
-	SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO, 
-		"addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
-		buf->addr_str, sizeof(buf->addr_str), "buf addr");
-	SYSCTL_ADD_ULONG(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO,
+		buf->oid_str, CTLFLAG_RW, 0, "buf oid");
+	buf->aoid = SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO, 
+		"addr", CTLFLAG_RD, buf->addr_str, sizeof(buf->addr_str), "buf addr");
+	buf->loid = SYSCTL_ADD_ULONG(&clist, SYSCTL_CHILDREN(buf->oid), OID_AUTO,
 		"len", CTLFLAG_RW, &buf->len, "buf len");
+
 	num_bufs++;
 }
 
 static void
 sysctl_remove_buf(struct alloc_buf *buf) {
-	sysctl_remove_oid(buf->oid, 1, 1);
+	sysctl_ctx_entry_del(&clist, buf->aoid);
+	sysctl_remove_oid(buf->aoid, 0, 0);
+	sysctl_ctx_entry_del(&clist, buf->loid);
+	sysctl_remove_oid(buf->loid, 0, 0);
+	sysctl_ctx_entry_del(&clist, buf->oid);
+	sysctl_remove_oid(buf->oid, 0, 0);
 	num_bufs--;
 }
 
@@ -134,10 +138,13 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
     if (alloc_size) {
 #if MULTI_BUF
 		tmp_alloc_buf = malloc(sizeof(struct alloc_buf), M_KLDMALLOCBUF, M_NOWAIT);
-		if (!tmp_alloc_buf)
+		if (!tmp_alloc_buf) {
+			printf("Malloc: allocate record buffer failed\n");
 			goto alloc_ret;
+		}
 		p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT);
 		if (!p) {
+			printf("Malloc: allocate failed\n");
 			free(tmp_alloc_buf, M_KLDMALLOCBUF);
 			goto alloc_ret;
 		}
@@ -145,6 +152,8 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 		update_buf(tmp_alloc_buf, p, alloc_size);
 		sysctl_add_buf(tmp_alloc_buf);
 		allocated += alloc_size;
+		printf("Malloc: allocate %lu success, allocated size %lu\n",
+				alloc_size, allocated);
 #else
         if (allocated)
             p = realloc(addr_p, (allocated + alloc_size), M_KLDMALLOCBUF, M_NOWAIT);
@@ -170,7 +179,7 @@ static int
 sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 {
     int error = 0;
-    unsigned long size = 0;
+    unsigned long size = 0, tmp_free_size;
     void *p = NULL;
     unsigned long ret = 0;
     
@@ -180,16 +189,22 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
         goto free_ret;
     }
 
-    if (strcmp(free_str,""))
+	if (!strcmp(free_str,"all"))
+		ret = allocated;
+    else if (strcmp(free_str,""))
         ret = size_strtoul(free_str);
-    else if (!strcmp(free_str,"all"))
-        ret = allocated;
     free_siz = ret;
 
     if (free_siz) {
 #if MULTI_BUF
-		while (free_siz > 0 && allocated > free_siz) {
-			tmp_alloc_buf = TAILQ_LAST(&head, tailhead);
+		printf("Malloc: try to free %lu from %lu \n", free_siz, allocated);
+		if (allocated < free_siz) {
+			printf("Malloc: larger than allocated size\n");
+			goto free_ret;
+		}
+		while (free_siz) {
+			tmp_free_size = free_siz;
+			tmp_alloc_buf = TAILQ_FIRST(&head);
 			if (!tmp_alloc_buf) {
 				printf("Malloc: no buf found to free %lu!\n", free_siz);
 				goto free_ret;
@@ -206,13 +221,15 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 					update_buf(tmp_alloc_buf, p, size);
 				}
 			} else {
-				allocated -= tmp_alloc_buf->len;
-				free_siz -= tmp_alloc_buf->len;
+				tmp_free_size = tmp_alloc_buf->len;
+				allocated -= tmp_free_size;
+				free_siz -= tmp_free_size;
 				free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
 				sysctl_remove_buf(tmp_alloc_buf);
 				TAILQ_REMOVE(&head, tmp_alloc_buf, alloc_bufs);
 				free(tmp_alloc_buf, M_KLDMALLOCBUF);
 			}
+			printf("Malloc: free %lu success, allocated size %lu\n", tmp_free_size, allocated);
 		}
 #else
         if (allocated > free_siz) {
@@ -249,7 +266,7 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
     int error = 0;
 
     switch (event) {
-        case MOD_LOAD:            
+        case MOD_LOAD:
             sysctl_ctx_init(&clist);
 
             poid = SYSCTL_ADD_NODE(&clist,
@@ -269,7 +286,7 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
                     "A", "size to free");
 #if !MULTI_BUF
             SYSCTL_ADD_STRING(&clist, SYSCTL_CHILDREN(poid), OID_AUTO, 
-                    "addr", CTLFLAG_RD | CTLFLAG_MPSAFE, 
+                    "addr", CTLFLAG_RD, 
                     addr_str, sizeof(addr_str), "allocalted address");
             sysctl_update_addr(NULL);
 #else
@@ -281,11 +298,12 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
             break;
         case MOD_UNLOAD:
 #if MULTI_BUF
-			TAILQ_FOREACH_SAFE(tmp_alloc_buf, &head, alloc_bufs, tmp_free_buf) {
+			tmp_alloc_buf= TAILQ_FIRST(&head);
+			while (tmp_alloc_buf) {
+				tmp_free_buf = TAILQ_NEXT(tmp_alloc_buf, alloc_bufs);
 				free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
-				sysctl_remove_buf(tmp_alloc_buf);
-				TAILQ_REMOVE(&head, tmp_alloc_buf, alloc_bufs);
 				free(tmp_alloc_buf, M_KLDMALLOCBUF);
+				tmp_alloc_buf = tmp_free_buf;
 			}
 			if (sysctl_ctx_free(&clist)) {
                 uprintf("sysctl_ctx_free failed.\n");
