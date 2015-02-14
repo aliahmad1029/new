@@ -106,7 +106,7 @@ size_strtoul(char *str)
 
     ret = strtol(str, NULL, 10);
 #ifdef DEBUG_STRTOL
-    printf("%s: strtol ret %ld base %ld \n", __func__, ret, base);
+    uprintf("%s: strtol ret %ld base %ld \n", __func__, ret, base);
 #endif
     if (ret == EINVAL || ret == ERANGE || ret < 0)
         return 0;
@@ -127,7 +127,7 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
        
     error = sysctl_handle_string(oidp, alloc_str, sizeof(alloc_str), req);
     if (error) {
-        printf("Malloc: sysctl_handle_int failed\n");
+        uprintf("Malloc: sysctl_handle_int failed\n");
         goto alloc_ret;
     }
     
@@ -139,12 +139,12 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 #if MULTI_BUF
 		tmp_alloc_buf = malloc(sizeof(struct alloc_buf), M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 		if (!tmp_alloc_buf) {
-			printf("Malloc: allocate record buffer failed\n");
+			uprintf("Malloc: allocate record buffer failed\n");
 			goto alloc_ret;
 		}
 		p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 		if (!p) {
-			printf("Malloc: allocate failed\n");
+			uprintf("Malloc: allocate failed\n");
 			free(tmp_alloc_buf, M_KLDMALLOCBUF);
 			goto alloc_ret;
 		}
@@ -152,7 +152,7 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 		update_buf(tmp_alloc_buf, p, alloc_size);
 		sysctl_add_buf(tmp_alloc_buf);
 		allocated += alloc_size;
-		printf("Malloc: allocate %lu success, allocated size %lu\n",
+		uprintf("Malloc: allocate %lu success, allocated size %lu\n",
 				alloc_size, allocated);
 #else
         if (allocated)
@@ -161,11 +161,11 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
             p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT);
         }
         if (!p)
-            printf("Malloc: allocate failed\n");
+            uprintf("Malloc: allocate failed\n");
         else {
             allocated += alloc_size;
             sysctl_update_addr(p);
-            printf("Malloc: allocate %lu at %p, allocated size %lu\n",
+            uprintf("Malloc: allocate %lu at %p, allocated size %lu\n",
                     alloc_size, addr_p, allocated);
         }
 #endif
@@ -185,7 +185,7 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
     
     error = sysctl_handle_string(oidp, free_str, sizeof(free_str), req);
     if (error) {
-        printf("Malloc: sysctl_handle_int failed\n");
+        uprintf("Malloc: sysctl_handle_int failed\n");
         goto free_ret;
     }
 
@@ -197,23 +197,23 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 
     if (free_siz) {
 #if MULTI_BUF
-		printf("Malloc: try to free %lu from %lu \n", free_siz, allocated);
+		uprintf("Malloc: try to free %lu from %lu \n", free_siz, allocated);
 		if (allocated < free_siz) {
-			printf("Malloc: larger than allocated size\n");
+			uprintf("Malloc: larger than allocated size\n");
 			goto free_ret;
 		}
 		while (free_siz) {
 			tmp_free_size = free_siz;
 			tmp_alloc_buf = TAILQ_FIRST(&head);
 			if (!tmp_alloc_buf) {
-				printf("Malloc: no buf found to free %lu!\n", free_siz);
+				uprintf("Malloc: no buf found to free %lu!\n", free_siz);
 				goto free_ret;
 			}
 			if (tmp_alloc_buf->len > free_siz) {
 				size = tmp_alloc_buf->len - free_siz;
 				p = realloc(tmp_alloc_buf->addr_p, size, M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 				if (!p) {
-					printf("Malloc: realloc failed\n");
+					uprintf("Malloc: realloc failed\n");
 					goto free_ret;
 				} else {
 					allocated -= free_siz;
@@ -229,7 +229,7 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 				TAILQ_REMOVE(&head, tmp_alloc_buf, alloc_bufs);
 				free(tmp_alloc_buf, M_KLDMALLOCBUF);
 			}
-			printf("Malloc: free %lu success, allocated size %lu\n", tmp_free_size, allocated);
+			uprintf("Malloc: free %lu success, allocated size %lu\n", tmp_free_size, allocated);
 		}
 #else
         if (allocated > free_siz) {
@@ -237,20 +237,20 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
             p = realloc(addr_p, size, M_KLDMALLOCBUF, M_NOWAIT);
             
             if (!p)
-                printf("Malloc: realloc failed\n");
+                uprintf("Malloc: realloc failed\n");
             else {
                 allocated = size;
                 sysctl_update_addr(p);
-                printf("Malloc: free %lu success at %p, allocated size %lu\n",
+                uprintf("Malloc: free %lu success at %p, allocated size %lu\n",
                     free_siz, addr_p, allocated);
             }
         } else if (allocated == free_siz) {
             free(addr_p, M_KLDMALLOCBUF);
             allocated = 0;
             sysctl_update_addr(NULL);
-            printf("Malloc: free all allocated size\n");
+            uprintf("Malloc: free all allocated size\n");
         } else {
-            printf("Malloc: larger than allocated size\n");
+            uprintf("Malloc: larger than allocated size\n");
         }
 #endif
     }
