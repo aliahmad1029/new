@@ -137,12 +137,12 @@ sysctl_alloc_procedure(SYSCTL_HANDLER_ARGS)
 
     if (alloc_size) {
 #if MULTI_BUF
-		tmp_alloc_buf = malloc(sizeof(struct alloc_buf), M_KLDMALLOCBUF, M_NOWAIT);
+		tmp_alloc_buf = malloc(sizeof(struct alloc_buf), M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 		if (!tmp_alloc_buf) {
 			printf("Malloc: allocate record buffer failed\n");
 			goto alloc_ret;
 		}
-		p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT);
+		p = malloc(alloc_size, M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 		if (!p) {
 			printf("Malloc: allocate failed\n");
 			free(tmp_alloc_buf, M_KLDMALLOCBUF);
@@ -211,7 +211,7 @@ sysctl_free_procedure(SYSCTL_HANDLER_ARGS)
 			}
 			if (tmp_alloc_buf->len > free_siz) {
 				size = tmp_alloc_buf->len - free_siz;
-				p = realloc(tmp_alloc_buf->addr_p, size, M_KLDMALLOCBUF, M_NOWAIT);
+				p = realloc(tmp_alloc_buf->addr_p, size, M_KLDMALLOCBUF, M_NOWAIT|M_USE_RESERVE);
 				if (!p) {
 					printf("Malloc: realloc failed\n");
 					goto free_ret;
