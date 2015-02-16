@@ -298,14 +298,14 @@ malloc_modevent(module_t mod __unused, int event, void *arg __unused)
             break;
         case MOD_UNLOAD:
 #if MULTI_BUF
-			tmp_alloc_buf= TAILQ_FIRST(&head);
-			while (tmp_alloc_buf) {
-				tmp_free_buf = TAILQ_NEXT(tmp_alloc_buf, alloc_bufs);
-				free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
-				free(tmp_alloc_buf, M_KLDMALLOCBUF);
-				tmp_alloc_buf = tmp_free_buf;
-			}
-			if (sysctl_ctx_free(&clist)) {
+            tmp_alloc_buf= TAILQ_FIRST(&head);
+            while (tmp_alloc_buf) {
+                tmp_free_buf = TAILQ_NEXT(tmp_alloc_buf, alloc_bufs);
+                free(tmp_alloc_buf->addr_p, M_KLDMALLOCBUF);
+                free(tmp_alloc_buf, M_KLDMALLOCBUF);
+                tmp_alloc_buf = tmp_free_buf;
+            }
+            if (sysctl_ctx_free(&clist)) {
                 uprintf("sysctl_ctx_free failed.\n");
                 return (ENOTEMPTY);
             }
